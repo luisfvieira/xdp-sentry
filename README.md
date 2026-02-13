@@ -1,45 +1,74 @@
-## Passo 1: Limpeza Total (The "Clean" Phase)
+# 🚀 XDP-Sentry: High-Performance Kernel-Level Networking Defense
 
-Antes de tentar carregar novamente, precisamos remover os "vínculos" antigos que ficaram presos no sistema de arquivos do Kernel:
-Bash
+A low-latency, kernel-level firewall built with **C**, **eBPF**, and **XDP**. This project demonstrates how to intercept and drop malicious network traffic at the driver level, bypassing the heavy lifting of the standard Linux networking stack.
 
-### Remove o diretório e todos os arquivos dentro dele
-´´´
-sudo rm -rf /sys/fs/bpf/monitor
-´´´
 
-Passo 2: Verificação do Código
 
-Confirme se o seu arquivo monitor.bpf.c usa exatamente BPF_PROG (sem o "RESS" no final) e se você incluiu os headers na ordem correta.
-Passo 3: Recompilação "Limpando" o Binário
+## 🏗️ System Architecture
 
-Para garantir que o clang está gerando o binário certo, vamos apagar o objeto antigo e compilar novamente:
-Bash
+This project implements a **Split-Plane Architecture**, decoupling high-speed packet processing from security policy management:
 
-### Apague o binário antigo
-rm monitor.bpf.o
+1.  **Data Plane (Kernel Space):** An eBPF program attached to the **XDP (eXpress Data Path)** hook. It performs L2/L3 parsing and packet dropping in nanoseconds.
+2.  **Control Plane (User Space):** A C application that interacts with the Data Plane via **BPF Maps**, allowing for real-time updates to the IP blacklist without reloading the kernel program.
 
-# Recompile (preste atenção se o clang solta algum aviso/warning)
-clang -g -O2 -target bpf -D__TARGET_ARCH_x86 \
-      -I/usr/include/bpf \
-      -c monitor.bpf.c -o monitor.bpf.o
+---
 
-Passo 4: Carregando com o bpftool
+## 📂 Repository Structure
 
-Agora que limpamos o caminho, o comando deve funcionar. O bpftool vai criar o diretório /sys/fs/bpf/monitor automaticamente:
-Bash
+| File | Role | Technical Description |
+| :--- | :--- | :--- |
+| `vmlinux.h` | **Kernel Definitions** | Internal kernel structures generated via BTF for CO-RE compliance. |
+| `xdp_fw.bpf.c` | **Kernel Program** | eBPF source code implementing L3 filtering logic and $O(1)$ hash map lookups. |
+| `xdp_fw.bpf.o` | **BPF Bytecode** | Compiled ELF object containing eBPF instructions. |
+| `sentry.c` | **Control Plane** | Management interface CLI to dynamically push blacklisted IPs into the kernel map. |
+| `Makefile` | **Build System** | Automates compilation of both BPF bytecode and Userspace binary. |
 
-# Cria o diretório base para os pins
-sudo mkdir -p /sys/fs/bpf/monitor
+---
 
-# Carrega e pina
-sudo bpftool prog loadall monitor.bpf.o /sys/fs/bpf/monitor
+## ⚡ Performance: Why XDP?
 
-Passo 5: Verificando os nomes (O pulo do gato)
+Traditional firewalls like `iptables` process packets after the kernel has already allocated an `sk_buff` (socket buffer). This is costly during high-volume DDoS attacks.
 
-Se o comando acima funcionar, rode o comando abaixo para ver quais nomes o Kernel deu aos seus programas:
-Bash
+**XDP-Sentry** operates at the earliest possible point:
+* **Zero-Copy:** Packets are processed directly in the RX ring buffer.
+* **Constant Time:** Blacklist lookups use BPF Hash Maps with $O(1)$ complexity.
+* **Driver-Level Execution:** By returning `XDP_DROP`, CPU cycles are saved, preventing interrupt storms and protecting system stability.
 
-ls /sys/fs/bpf/monitor
 
-Se aparecerem execve_enter e execve_exit, sucesso! O código foi compilado e carregado corretamente. Se ainda aparecer BPF_PROGRESS, o clang não está encontrando a definição da macro no header <bpf/bpf_tracing.h>.
+
+---
+
+## 🛠️ Build and Run
+
+### Prerequisites
+* Ubuntu 22.04 LTS (Kernel 5.15+)
+* `clang`, `llvm`, `libbpf-dev`, `bpftool`
+
+### 1. Build the project
+Simply run `make` to compile both the Kernel-space BPF bytecode and the User-space Sentinel tool:
+```bash
+make
+```
+
+### 2. Deploy to Interface
+
+To load the program into the `lo` (loopback) interface:
+
+```bash
+sudo make load
+```
+
+### 3. Run the Sentinel
+
+```bash
+sudo ./sentinel
+```
+
+### 4. Cleanup
+
+To detach the program and remove build artifacts:
+
+```bash
+sudo make unload
+make clean
+```
